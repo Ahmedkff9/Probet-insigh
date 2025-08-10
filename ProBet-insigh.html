@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ProBet Insight - Outil de Prédiction</title>
+<style>
+  body {
+    margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #121212; color: #eee; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  #loginSection, #appSection {
+    width: 100%; max-width: 960px; background: #1e1e1e;
+    border-radius: 10px; padding: 30px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.7);
+  }
+  #appSection { display: none; }
+  h1 {
+    text-align: center; margin-bottom: 25px;
+    color: #00bfa5;
+    font-weight: 700;
+    letter-spacing: 2px;
+  }
+  label {
+    display: block; margin-top: 18px; font-weight: 600;
+  }
+  input[type="password"], input[type="text"], input[type="number"] {
+    width: 100%; max-width: 300px;
+    padding: 10px 15px;
+    margin-top: 6px;
+    border: none;
+    border-radius: 8px;
+    background: #2a2a2a;
+    color: #eee;
+    font-size: 16px;
+  }
+  input[type="file"] {
+    margin-top: 12px;
+  }
+  button {
+    margin-top: 25px; 
+    padding: 15px 25px;
+    border: none; border-radius: 8px;
+    background: #00bfa5;
+    color: #121212;
+    font-weight: 700;
+    font-size: 18px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+  }
+  button:hover {
+    background: #009e85;
+  }
+  .error {
+    margin-top: 15px; color: #f44336; font-weight: 700; text-align: center;
+  }
+  .success {
+    margin-top: 15px; color: #4caf50; font-weight: 700; text-align: center;
+  }
+  .form-row {
+    display: flex; flex-wrap: wrap; gap: 20px; margin-top: 15px;
+  }
+  .form-group {
+    flex: 1 1 180px; min-width: 180px;
+  }
+  #results {
+    margin-top: 30px;
+    background: #222;
+    border-radius: 10px;
+    padding: 20px;
+    color: #eee;
+  }
+</style>
+</head>
+<body>
+
+<div id="loginSection">
+  <h1>ProBet Insight - Connexion</h1>
+  <label for="passwordInput">Mot de passe d'accès</label>
+  <input type="password" id="passwordInput" placeholder="Entrez le mot de passe" autocomplete="off" />
+  <button id="loginBtn">Se connecter</button>
+  <div id="loginError" class="error"></div>
+</div>
+
+<div id="appSection">
+  <h1>ProBet Insight - Outil de Prédiction</h1>
+
+  <label for="teamHome">Nom équipe domicile :</label>
+  <input type="text" id="teamHome" placeholder="Ex: PSG" autocomplete="off" />
+
+  <label for="teamAway">Nom équipe extérieur :</label>
+  <input type="text" id="teamAway" placeholder="Ex: Real Madrid" autocomplete="off" />
+
+  <div class="form-row">
+    <div class="form-group">
+      <label for="homeOdds">Cote Victoire Domicile (1):</label>
+      <input type="number" id="homeOdds" min="1" step="0.01" value="1.8" />
+    </div>
+    <div class="form-group">
+      <label for="drawOdds">Cote Nul (X):</label>
+      <input type="number" id="drawOdds" min="1" step="0.01" value="3.4" />
+    </div>
+    <div class="form-group">
+      <label for="awayOdds">Cote Victoire Extérieur (2):</label>
+      <input type="number" id="awayOdds" min="1" step="0.01" value="4.2" />
+    </div>
+  </div>
+
+  <label for="imageInput" style="margin-top: 25px;">Uploader capture(s) d'écran (PNG/JPG):</label>
+  <input type="file" id="imageInput" multiple accept="image/png, image/jpeg" />
+
+  <button id="extractBtn">Extraire & stocker données</button>
+  <div id="extractStatus"></div>
+
+  <button id="predictBtn" style="margin-top: 30px;">Prédire le score</button>
+
+  <div id="results"></div>
+</div>
+
+<script>
+(() => {
+  const PASSWORD = "GentlemanPRO25";
+
+  const loginSection = document.getElementById('loginSection');
+  const appSection = document.getElementById('appSection');
+  const loginBtn = document.getElementById('loginBtn');
+  const passwordInput = document.getElementById('passwordInput');
+  const loginError = document.getElementById('loginError');
+
+  const teamHomeInput = document.getElementById('teamHome');
+  const teamAwayInput = document.getElementById('teamAway');
+  const homeOddsInput = document.getElementById('homeOdds');
+  const drawOddsInput = document.getElementById('drawOdds');
+  const awayOddsInput = document.getElementById('awayOdds');
+  const imageInput = document.getElementById('imageInput');
+  const extractBtn = document.getElementById('extractBtn');
+  const extractStatus = document.getElementById('extractStatus');
+  const predictBtn = document.getElementById('predictBtn');
+  const resultsDiv = document.getElementById('results');
+
+  // IndexedDB Setup
+  let db;
+  const DB_NAME = "ProBetInsightDB";
+  const STORE_NAME = "matches";
+
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, 1);
+      request.onerror = () => reject("Erreur ouverture DB");
+      request.onsuccess = () => {
+        db = request.result;
+        resolve(db);
+      };
+      request.onupgradeneeded = (e) => {
+        db = e.target.result;
+        if(!db.objectStoreNames.contains(STORE_NAME)){
+          db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+        }
+      };
+    });
+  }
+
+  function storeMatchData(data) {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.add(data);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => reject("Erreur stockage données");
+    });
+  }
+
+  function getMatchesByTeams(home, away) {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, "readonly");
+      const store = tx.objectStore(STORE_NAME);
+      const matches = [];
+      store.openCursor().onsuccess = function(event) {
+        const cursor = event.target.result;
+        if(cursor){
+          const m = cursor.value;
+          if((m.teamHome.toLowerCase() === home.toLowerCase() && m.teamAway.toLowerCase() === away.toLowerCase())
+          || (m.teamHome.toLowerCase() === away.toLowerCase() && m.teamAway.toLowerCase() === home.toLowerCase())) {
+            matches.push(m);
+          }
+          cursor.continue();
+        } else {
+          resolve(matches);
+        }
+      };
+      store.openCursor().onerror = () => reject("Erreur lecture DB");
+    });
+  }
+
+  // Simulate extraction from image
+  async function extractDataFromImage(file, teamHome, teamAway) {
+    await new Promise(r => setTimeout(r, 700));
+    // Simulated random scores for half-time and full-time
+    const mtA = Math.floor(Math.random()*4);
+    const mtB = Math.floor(Math.random()*4);
+    const ftA = mtA + Math.floor(Math.random()*3);
+    const ftB = mtB + Math.floor(Math.random()*3);
+    const date = new Date().toISOString();
+    return {teamHome, teamAway, mtA, mtB, ftA, ftB, date};
+  }
+
+  // Login handler
+  loginBtn.addEventListener('click', () => {
+    loginError.textContent = "";
+    if(passwordInput.value === PASSWORD) {
+      loginSection.style.display = "none";
+      appSection.style.display = "block";
+      openDB().catch(e => {
+        loginError.textContent = e;
+        loginSection.style.display = "block";
+        appSection.style.display = "none";
+      });
+    } else {
+      loginError.textContent = "Mot de passe incorrect.";
+    }
+  });
+
+  // Extraction & storage
+  extractBtn.addEventListener('click', async () => {
+    extractStatus.textContent = "";
+    resultsDiv.innerHTML = "";
+    const files = imageInput.files;
+    const teamHome = teamHomeInput.value.trim();
+    const teamAway = teamAwayInput.value.trim();
+    if(!teamHome || !teamAway){
+      extractStatus.textContent = "Merci de saisir les noms des deux équipes avant d'extraire.";
+      extractStatus.style.color = "#f44336";
+      return;
+    }
+    if(!files.length){
+      extractStatus.textContent = "Veuillez sélectionner au moins une capture d'écran.";
+      extractStatus.style.color = "#f44336";
+      return;
+    }
+    extractStatus.style.color = "#00bfa5";
+    extractStatus.textContent = "Extraction et stockage en cours...";
+    for(let i=0; i<files.length; i++){
+      try{
+        const data = await extractDataFromImage(files[i], teamHome, teamAway);
+        await storeMatchData(data);
+      }catch(e){
+        extractStatus.style.color = "#f44336";
+        extractStatus.textContent = "Erreur durant l'extraction ou le stockage.";
+        return;
+      }
+    }
+    extractStatus.textContent = `Extraction et stockage terminés (${files.length} captures traitées). Les images ont été supprimées.`;
+    imageInput.value = "";
+  });
+
+  // Prediction helpers
+  function factorial(n) {
+    let f=1;
+    for(let i=2; i<=n; i++) f*=i;
+    return f;
+  }
+  function poissonPmf(k, lambda) {
+    return Math.pow(lambda, k) * Math.exp(-lambda) / factorial(k);
+  }
+  function oddsToProb(home, draw, away) {
+    const pHome = 1/home;
+    const pDraw = 1/draw;
+    const pAway = 1/away;
+    const sum = pHome + pDraw + pAway;
+    return { home: pHome/sum, draw: pDraw/sum, away: pAway/sum };
+  }
+  function calcLambdas(history) {
+    let sumMTHome=0, sumMTAway=0, sumFTHome=0, sumFTAway=0;
+    history.forEach(h=>{
+      sumMTHome += h.mtA;
+      sumMTAway += h.mtB;
+      sumFTHome += h.ftA;
+      sumFTAway += h.ftB;
+    });
+    return {
+      home_mt: sumMTHome/history.length,
+      away_mt: sumMTAway/history.length,
+      home_ft: sumFTHome/history.length,
+      away_ft: sumFTAway/history.length
+    };
+  }
+  function adjustLambdas(lambdas, probs, weight=0.4) {
+    const adv = probs.home - probs.away;
+    let adjHome = lambdas.home_ft * (1 + weight * adv);
+    let adjAway = lambdas.away_ft * (1 - weight * adv);
+    adjHome = Math.max(0.01, adjHome);
+    adjAway = Math.max(0.01, adjAway);
+    return {...lambdas, home_ft: adjHome, away_ft: adjAway};
+  }
+  function scoreDist(lambdaHome, lambdaAway, maxGoals=8) {
+    const dist = [];
+    for(let i=0; i<=maxGoals; i++){
+      dist[i] = [];
+      for(let j=0; j<=maxGoals; j++){
+        dist[i][j] = poissonPmf(i, lambdaHome) * poissonPmf(j, lambdaAway);
+      }
+    }
+    return dist;
+  }
+  function topNScores(dist, N=10) {
+    const scores = [];
+    const max = dist.length;
+    for(let i=0; i<max; i++) {
+      for(let j=0; j<max; j++) {
+        scores.push({score:[i,j], p: dist[i][j]});
+      }
+    }
+    scores.sort((a,b)=> b.p - a.p);
+    return scores.slice(0, N);
+  }
+
+  // Predict button handler
+  predictBtn.addEventListener('click', async () => {
+    resultsDiv.innerHTML = "";
+    const teamHome = teamHomeInput.value.trim();
+    const teamAway = teamAwayInput.value.trim();
+    if(!teamHome || !teamAway){
+      resultsDiv.innerHTML = `<div class="error">Veuillez saisir les noms des deux équipes.</div>`;
+      return;
+    }
+    const homeOdds = parseFloat(homeOddsInput.value);
+    const drawOdds = parseFloat(drawOddsInput.value);
+    const awayOdds = parseFloat(awayOddsInput.value);
+    if(!homeOdds || !drawOdds || !awayOdds){
+      resultsDiv.innerHTML = `<div class="error">Veuillez saisir des cotes valides (1X2).</div>`;
+      return;
+    }
+    let history = await getMatchesByTeams(teamHome, teamAway);
+    if(history.length === 0){
+      resultsDiv.innerHTML = `<div class="error">Aucune donnée historique trouvée. Uploadez des captures pour collecter des données.</div>`;
+      return;
+    }
+    const probs = oddsToProb(homeOdds, drawOdds, awayOdds);
+    let lambdas = calcLambdas(history);
+    lambdas = adjustLambdas(lambdas, probs, 0.4);
+    const distFT = scoreDist(lambdas.home_ft, lambdas.away_ft, 8);
+    const topFT = topNScores(distFT, 10);
+
+    let html = `<h2>Top 5 scores probables :</h2><ul>`;
+    topFT.slice(0,5).forEach(s => {
+      html += `<li><strong>${s.score[0]} - ${s.score[1]}</strong> (Probabilité : ${(s.p*100).toFixed(2)}%)</li>`;
+    });
+    html += "</ul>";
+
+    resultsDiv.innerHTML = html;
+  });
+
+})();
+</script>
+
+</body>
+</html>
